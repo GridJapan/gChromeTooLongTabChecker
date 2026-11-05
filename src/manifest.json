@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "TooLong Tab Checker",
+  "version": "0.1.0",
+  "description": "読み込んでから決めた時間を過ぎたタブを、窓ごとの「TooLong」グループに集めます。閉じて開き直すタブを見つけやすくします。",
+  "permissions": ["tabs", "tabGroups", "storage", "alarms", "webNavigation", "scripting"],
+  "optional_host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_title": "TooLong Tab Checker", "default_popup": "options.html" },
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "icons": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" }
+}

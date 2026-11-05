@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>TooLong Tab Checker</title>
+<style>
+  body { font: 14px/1.6 -apple-system, "Hiragino Sans", sans-serif; margin: 16px; min-width: 460px; color: #222; }
+  h1 { font-size: 16px; margin: 0 0 12px; }
+  fieldset { border: 1px solid #ddd; border-radius: 6px; margin: 0 0 12px; padding: 8px 12px; }
+  label { display: block; margin: 4px 0; }
+  input[type=number] { width: 5em; }
+  button { margin: 4px 8px 4px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 3px 6px; border-bottom: 1px solid #eee; white-space: nowrap; }
+  td.title { white-space: normal; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+  tr.over td { color: #c62828; }
+  .note { color: #666; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>TooLong Tab Checker</h1>
+
+<fieldset>
+  <label>読み込んでから <input id="hours" type="number" min="0.1" step="0.5"> 時間を過ぎたタブを「TooLong」へ移す</label>
+  <label>グループの色
+    <select id="color">
+      <option value="red">赤</option><option value="orange">橙</option><option value="yellow">黄</option>
+      <option value="green">緑</option><option value="cyan">水色</option><option value="blue">青</option>
+      <option value="purple">紫</option><option value="pink">桃</option><option value="grey">灰</option>
+    </select>
+  </label>
+  <label><input id="restore" type="checkbox"> 読み込み直したタブ・外れたタブを、元のグループへ戻す</label>
+  <button id="save">保存して今すぐ確かめる</button>
+  <span id="msg" class="note"></span>
+</fieldset>
+
+<fieldset>
+  <div class="note" id="perm-note"></div>
+  <button id="perm">すでに開いているタブの読み込み時刻を正確に読む（許可を求めます）</button>
+</fieldset>
+
+<div class="note" id="summary"></div>
+<table>
+  <thead><tr><th>経過</th><th>タブ</th><th>状態</th></tr></thead>
+  <tbody id="list"></tbody>
+</table>
+
+<script type="module" src="options.js"></script>
+</body>
+</html>
