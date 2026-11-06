@@ -94,13 +94,13 @@ test('記録の無いタブ: 許可が無ければ今から数え、許可があ
   w.host = false;
 });
 
-test('0.1.0 から更新したら、TooLong グループを片付けて元のグループへ戻す', async () => {
+test('入れたとき（更新でも入れ直しでも）、0.1.0 の TooLong グループを片付けて元のグループへ戻す', async () => {
   // 0.1.0 の状態: タブ 20・21 を TooLong へ移していた。20 は「仕事」（もう消えた）から、21 はグループ無しから
   w.tabs = [tab(20, { groupId: 7 }), tab(21, { groupId: 7 }), tab(22)];
   w.groups.push({ id: 7, windowId: 1, title: 'TooLong', color: 'red' });
   await chrome.storage.session.set({ origGroup: { 20: { id: 5, title: '仕事', color: 'blue' } } });
   await chrome.storage.sync.set({ color: 'red', restore: true });
-  await chrome.runtime.onInstalled.fire({ reason: 'update' });
+  await chrome.runtime.onInstalled.fire({ reason: 'install' });
   await send(chrome, { type: 'check' });   // 片付けが終わるのを待つ
 
   const g20 = w.groups.find(g => g.id === w.tabs[0].groupId);

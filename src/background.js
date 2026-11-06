@@ -117,10 +117,11 @@ function schedule() {
   chrome.alarms.create(ALARM, { periodInMinutes: 5 });
 }
 
-chrome.runtime.onInstalled.addListener(d => {
+// 入れ直し（いったん外して読み込み直す）だと reason が install になるので、理由によらず片付ける
+chrome.runtime.onInstalled.addListener(() => {
   schedule();
   serial(async () => {
-    if (d.reason === 'update') await cleanupOldGroups();
+    await cleanupOldGroups();
     await check();
   });
 });
