@@ -1,7 +1,8 @@
-// タブを読み込んだ時刻を覚え、決めた時間を過ぎたタブの数をアイコンに出す。一覧と移動は popup（options.html）が行う。
+// タブを読み込んだ時刻と、ページのメモリ（JavaScript のメモリ）の移り変わりを覚え、決めた時間を過ぎたタブの数をアイコンに出す。
+// 一覧と移動は popup（options.html）が行う。
 // 外へは何も送らない。記録は chrome.storage.session（Chrome を終えると消える。タブも読み込み直しになるので合う）。
 
-import { DEFAULTS, OLD_GROUP_TITLE, overdue, isLoaded } from './core.js';
+import { DEFAULTS, OLD_GROUP_TITLE, overdue, isLoaded, addSample } from './core.js';
 
 const ALARM = 'toolong-check';
 
@@ -18,8 +19,8 @@ async function settings() {
 }
 
 async function loadState() {
-  const s = await chrome.storage.session.get({ loadedAt: {} });
-  return { loadedAt: s.loadedAt };
+  const s = await chrome.storage.session.get({ loadedAt: {}, mem: {} });
+  return { loadedAt: s.loadedAt, mem: s.mem };
 }
 
 async function saveState(state) {
@@ -55,11 +56,32 @@ async function check() {
 
   const live = new Set(tabs.map(t => t.id));
   for (const id of Object.keys(state.loadedAt)) if (!live.has(+id)) delete state.loadedAt[id];
+  for (const id of Object.keys(state.mem)) if (!live.has(+id)) delete state.mem[id];
   await saveState(state);
 
   const count = overdue(tabs, state.loadedAt, Date.now(), conf.hours).length;
   await chrome.action.setBadgeText({ text: count ? String(count) : '' });
   await chrome.action.setBadgeBackgroundColor({ color: '#c62828' });
+}
+
+// 読み込まれている各タブのページのメモリ（performance.memory.usedJSHeapSize）を測って記録に足す。
+// 「すべてのサイト」の許可が要る。Chrome の通常版では、拡張機能からタブのプロセスのメモリ（chrome.processes）は読めないため、
+// ページの JavaScript のメモリで代わりにする（Gmail などが使い続けて増えるのは主にここ）。同じプロセスを共有するタブは同じ値になることがある。
+async function sample() {
+  if (!(await chrome.permissions.contains({ origins: ['<all_urls>'] }))) return;
+  const state = await loadState();
+  const tabs = (await chrome.tabs.query({})).filter(t => isLoaded(t) && /^https?:/.test(t.url || ''));
+  const now = Date.now();
+  await Promise.all(tabs.map(async t => {
+    try {
+      const [r] = await Promise.race([
+        chrome.scripting.executeScript({ target: { tabId: t.id }, func: () => performance.memory?.usedJSHeapSize ?? null }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000)),
+      ]);
+      if (typeof r?.result === 'number') state.mem[t.id] = addSample(state.mem[t.id], now, r.result);
+    } catch { /* 凍結中・読めないページは飛ばす */ }
+  }));
+  await saveState(state);
 }
 
 // 0.1.0 は、時間を過ぎたタブを「TooLong」グループへ移していた。そのグループを片付け、元のグループへ戻す
@@ -94,6 +116,7 @@ async function cleanupOldGroups() {
 chrome.webNavigation.onCommitted.addListener(d => d.frameId === 0 && serial(async () => {
   const state = await loadState();
   state.loadedAt[d.tabId] = Math.round(d.timeStamp);
+  delete state.mem[d.tabId];   // ページが替わったので、メモリは測り直す
   await saveState(state);
 }));
 
@@ -101,13 +124,16 @@ chrome.webNavigation.onCommitted.addListener(d => d.frameId === 0 && serial(asyn
 chrome.tabs.onReplaced.addListener((added, removed) => serial(async () => {
   const state = await loadState();
   if (state.loadedAt[removed] !== undefined) state.loadedAt[added] = state.loadedAt[removed];
+  if (state.mem[removed] !== undefined) state.mem[added] = state.mem[removed];
   delete state.loadedAt[removed];
+  delete state.mem[removed];
   await saveState(state);
 }));
 
 chrome.tabs.onRemoved.addListener(id => serial(async () => {
   const state = await loadState();
   delete state.loadedAt[id];
+  delete state.mem[id];
   await saveState(state);
 }));
 
@@ -123,10 +149,11 @@ chrome.runtime.onInstalled.addListener(() => {
   serial(async () => {
     await cleanupOldGroups();
     await check();
+    await sample();
   });
 });
 chrome.runtime.onStartup.addListener(() => { schedule(); serial(check); });
-chrome.alarms.onAlarm.addListener(a => { if (a.name === ALARM) serial(check); });
+chrome.alarms.onAlarm.addListener(a => { if (a.name === ALARM) serial(async () => { await check(); await sample(); }); });
 
 // 一覧の画面から
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
@@ -138,15 +165,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     serial(async () => {
       await check();
       const state = await loadState();
-      return { tabs: await chrome.tabs.query({}), loadedAt: state.loadedAt, windows: (await chrome.windows.getAll()).map(w => w.id) };
+      return {
+        tabs: await chrome.tabs.query({}), loadedAt: state.loadedAt, mem: state.mem,
+        windows: (await chrome.windows.getAll()).map(w => w.id),
+        canRead: await chrome.permissions.contains({ origins: ['<all_urls>'] }),
+      };
     }).then(reply, e => reply({ error: String(e) }));
     return true;
   }
   if (msg?.type === 'forget') {
     // 許可を出した直後など、読み込み時刻を取り直す
     serial(async () => {
-      await saveState({ loadedAt: {} });
+      await saveState({ loadedAt: {}, mem: {} });
       await check();
+      await sample();
     }).then(() => reply({ ok: true }), e => reply({ ok: false, error: String(e) }));
     return true;
   }

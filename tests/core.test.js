@@ -23,3 +23,18 @@ test('経過時間の表示', () => {
   assert.equal(formatAge(3 * HOUR + 5 * 60000), '3時間5分');
   assert.equal(formatAge(50 * HOUR), '2日2時間');
 });
+
+test('メモリの記録: 最初・今・最低・最高と、1 時間あたりの増え方', async () => {
+  const { addSample, perHour, formatMB } = await import('../src/core.js');
+  const MB = 1048576;
+  let r = addSample(undefined, 0, 100 * MB);
+  assert.equal(perHour(r), null, '1 回だけでは出さない');
+  r = addSample(r, 5 * 60000, 80 * MB);
+  assert.equal(perHour(r), null, '10 分に満たなければ出さない');
+  r = addSample(r, 30 * 60000, 160 * MB);
+  r = addSample(r, 2 * HOUR, 300 * MB);
+  assert.deepEqual([r.v0, r.v, r.min, r.max], [100 * MB, 300 * MB, 80 * MB, 300 * MB]);
+  assert.equal(perHour(r), 100 * MB);
+  assert.equal(formatMB(perHour(r)), '100MB');
+  assert.equal(formatMB(null), '—');
+});

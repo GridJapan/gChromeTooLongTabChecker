@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "TooLong Tab Checker",
-  "version": "0.2.1",
-  "description": "読み込んでから決めた時間を過ぎたタブを一覧にします。押すと、そのタブの窓とタブへ移ります。閉じて開き直すタブを見つけやすくします。",
+  "version": "0.3.0",
+  "description": "読み込んでから決めた時間を過ぎたタブを一覧にし、ページのメモリの増え方（最初・今・最低・最高・1 時間あたり）を出します。押すと、そのタブの窓とタブへ移ります。",
   "permissions": [
     "tabs",
     "tabGroups",

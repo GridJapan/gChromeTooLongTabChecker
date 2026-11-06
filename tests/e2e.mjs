@@ -3,19 +3,22 @@
 //   CFT=<Chrome for Testing の実行ファイル> node tests/e2e.mjs
 // 既定は Playwright が入れる場所（npx playwright install chromium）。
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, cpSync, readFileSync, writeFileSync, realpathSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 const PW = join(process.env.HOME, 'Library/Caches/ms-playwright');
 const CFT = process.env.CFT || join(PW, readdirSync(PW).filter(d => /^chromium-\d+$/.test(d)).sort().pop(),
   'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing');
-const EXT = resolve(import.meta.dirname, '../src');
+// 試験では、メモリを測る許可（すべてのサイト）を最初から出した写しを読み込ませる（許可の窓は押せないため）
+const EXT = realpathSync(mkdtempSync(join(tmpdir(), 'toolong-ext-')));
+cpSync(resolve(import.meta.dirname, '../src'), EXT, { recursive: true });
+{ const m = JSON.parse(readFileSync(join(EXT, 'manifest.json'))); m.host_permissions = ['<all_urls>']; writeFileSync(join(EXT, 'manifest.json'), JSON.stringify(m)); }
 const site = createServer((req, res) => { const n = req.url.match(/p(\d)/)?.[1] ?? '0'; res.end(`<title>page${n}</title>page${n}`); }).listen(8766, '127.0.0.1');
 import { createHash } from 'node:crypto';
 const MYID = [...createHash('sha256').update(EXT).digest('hex').slice(0, 32)].map(c => String.fromCharCode(97 + parseInt(c, 16))).join('');
 const prof = mkdtempSync(join(tmpdir(), 'toolong-e2e-'));
-const done = code => { ch.kill(); site.close(); setTimeout(() => { rmSync(prof, { recursive: true, force: true }); process.exit(code); }, 500); };
+const done = code => { ch.kill(); site.close(); setTimeout(() => { rmSync(prof, { recursive: true, force: true }); rmSync(EXT, { recursive: true, force: true }); process.exit(code); }, 500); };
 const port = 9333;
 const ch = spawn(CFT, [`--user-data-dir=${prof}`, `--load-extension=${EXT}`, `--disable-extensions-except=${EXT}`,
   `--remote-debugging-port=${port}`, '--headless=new', '--no-first-run', '--no-default-browser-check', 'about:blank'], { stdio: 'ignore' });
@@ -59,12 +62,18 @@ await ev(`(async () => {
 await sleep(8500);
 await ev(`(async () => { const [t] = await chrome.tabs.query({ url: '${B}p2' }); await chrome.tabs.reload(t.id); await new Promise(r => setTimeout(r, 1500)); return 1; })()`);
 
+// 5 分ごとの確認（読み込み時刻とメモリ）を 2 回鳴らす
+for (let i = 0; i < 2; i++) await ev(`(async () => { chrome.alarms.create('toolong-check', { when: Date.now() + 10 }); await new Promise(r => setTimeout(r, 2500)); return 1; })()`);
 const EXTURL = `chrome-extension://${MYID}/options.html`;
 await ev(`chrome.tabs.create({ url: '${EXTURL}' }).then(() => 1)`);
 await sleep(2500);
 const page = await attach(EXTURL);
 const items = await page.run(`[...document.querySelectorAll('#list li .title')].map(e => e.textContent)`);
 expect('時間を過ぎたタブだけが、古い順に一覧に出る（最初の about:blank も古い。読み込み直した p2 は出ない）', items, ['about:blank', 'page1', 'page3']);
+const mem = await page.run(`[...document.querySelectorAll('#list li')].map(li => li.querySelector('.mem').textContent)`);
+expect('http のタブにはメモリ（最初・今・最低・最高）が出る', /^メモリ 最初 \d+MB → 今 \d+MB（最低 \d+MB／最高 \d+MB）・1 時間あたり 測定中$/.test(mem[1]), true);
+expect('about:blank は測れないと出る', mem[0], 'メモリ: このページは測れません');
+console.log('    ' + mem[1]);
 expect('アイコンの数', await ev(`chrome.action.getBadgeText({})`), '3');   // p1・p3 と最初の about:blank
 
 // 一覧の page3（別の窓）を押す

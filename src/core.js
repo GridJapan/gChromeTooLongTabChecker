@@ -39,3 +39,19 @@ export function formatAge(ms) {
   if (h) return `${h}時間${mm}分`;
   return `${mm}分`;
 }
+
+// メモリの記録 { t0, v0, t, v, min, max }（v はバイト）に、測った値を 1 つ足す
+export function addSample(rec, t, v) {
+  if (!rec) return { t0: t, v0: v, t, v, min: v, max: v };
+  return { ...rec, t, v, min: Math.min(rec.min, v), max: Math.max(rec.max, v) };
+}
+
+// 最初に測ってから今までの、1 時間あたりの増え方（バイト）。測った間が 10 分に満たなければ null
+export function perHour(rec) {
+  const dt = rec.t - rec.t0;
+  return dt >= 10 * 60000 ? (rec.v - rec.v0) / dt * HOUR : null;
+}
+
+export function formatMB(bytes) {
+  return bytes === null || bytes === undefined ? '—' : `${Math.round(bytes / 1048576)}MB`;
+}

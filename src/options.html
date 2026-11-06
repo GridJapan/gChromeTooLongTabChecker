@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>TooLong Tab Checker</title>
 <style>
-  body { font: 13px/1.5 -apple-system, "Hiragino Sans", sans-serif; margin: 0; min-width: 480px; max-width: 640px; color: #222; }
+  body { font: 13px/1.5 -apple-system, "Hiragino Sans", sans-serif; margin: 0; min-width: 560px; max-width: 720px; color: #222; }
   header { padding: 10px 12px 6px; border-bottom: 1px solid #e5e5e5; }
   h1 { font-size: 14px; margin: 0 0 2px; }
   #summary { color: #555; }
@@ -13,7 +13,11 @@
   li:hover, li:focus { background: #fdecea; outline: none; }
   li img { width: 16px; height: 16px; flex: none; }
   .age { flex: none; width: 5.5em; color: #c62828; font-weight: 600; text-align: right; }
-  .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .main { flex: 1; min-width: 0; }
+  .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mem { color: #666; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mem .up { color: #c62828; font-weight: 600; }
+  .mem .down { color: #2e7d32; }
   .win { flex: none; color: #888; font-size: 12px; }
   .empty { padding: 16px 12px; color: #2e7d32; }
   footer { padding: 8px 12px; border-top: 1px solid #e5e5e5; color: #555; font-size: 12px; }
@@ -32,7 +36,7 @@
   読み込んでから <input id="hours" type="number" min="0.1" step="0.5"> 時間を過ぎたタブを出す
   <button id="save">変える</button>
   <div id="perm-note"></div>
-  <button id="perm">すでに開いているタブの読み込み時刻を正確に読む（許可を求めます）</button>
+  <button id="perm">メモリを測る・読み込み時刻を正確に読む（すべてのサイトの許可を求めます）</button>
 </footer>
 <script type="module" src="options.js"></script>
 </body>

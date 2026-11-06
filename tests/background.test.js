@@ -12,7 +12,7 @@ function fakeChrome() {
     set: async o => { Object.assign(store[name], structuredClone(o)); },
     remove: async k => { for (const x of [].concat(k)) delete store[name][x]; },
   });
-  const w = { tabs: [], groups: [], nextGroup: 100, badge: '', host: false };
+  const w = { tabs: [], groups: [], nextGroup: 100, badge: '', host: false, heap: {} };
   const alive = g => w.tabs.some(t => t.groupId === g.id);
   const c = {
     _w: w, _store: store,
@@ -36,7 +36,8 @@ function fakeChrome() {
     windows: { getAll: async () => [...new Set(w.tabs.map(t => t.windowId))].map(id => ({ id })) },
     webNavigation: { onCommitted: ev() },
     permissions: { contains: async () => w.host },
-    scripting: { executeScript: async () => [{ result: Date.now() - 48 * HOUR }] },
+    // 読み込んだ時刻を聞かれたら 48 時間前、メモリを聞かれたら w.heap の値を返す
+    scripting: { executeScript: async ({ target, func }) => [{ result: String(func).includes('memory') ? (w.heap[target.tabId] ?? null) : Date.now() - 48 * HOUR }] },
     alarms: { create: () => {}, onAlarm: ev() },
     runtime: { onInstalled: ev(), onStartup: ev(), onMessage: ev() },
     action: { setBadgeText: async ({ text }) => { w.badge = text; }, setBadgeBackgroundColor: async () => {} },
@@ -45,6 +46,8 @@ function fakeChrome() {
 }
 
 const send = (c, msg) => new Promise(res => c.runtime.onMessage.fire(msg, {}, res));
+// 5 分ごとの確認を鳴らし、終わるまで待つ（処理は順番待ちなので、あとの check が返れば終わっている）
+const tick = async c => { await c.alarms.onAlarm.fire({ name: 'toolong-check' }); await send(c, { type: 'check' }); };
 const tab = (id, o = {}) => ({ id, windowId: 1, groupId: -1, pinned: false, discarded: false, status: 'complete', url: 'https://example.com/', ...o });
 
 const chrome = fakeChrome();
@@ -108,4 +111,37 @@ test('入れたとき（更新でも入れ直しでも）、0.1.0 の TooLong �
   assert.equal(w.tabs[1].groupId, -1);
   assert.equal(chrome._store.session.origGroup, undefined);
   assert.equal(chrome._store.sync.color, undefined);
+});
+
+test('許可があれば、メモリを測って最初・今・最低・最高を記録する。読み込み直したら測り直す', async () => {
+  const MB = 1048576;
+  w.groups = [];
+  w.tabs = [tab(40), tab(41, { url: 'chrome://newtab/' }), tab(42, { discarded: true })];
+  w.host = true;
+  w.heap = { 40: 100 * MB, 41: 5 * MB, 42: 5 * MB };
+  await chrome.runtime.onInstalled.fire({ reason: 'install' });
+  await send(chrome, { type: 'check' });
+  w.heap[40] = 60 * MB;
+  await tick(chrome);
+  w.heap[40] = 250 * MB;
+  await tick(chrome);
+  const st = await send(chrome, { type: 'status' });
+  const r = st.mem[40];
+  assert.deepEqual([r.v0, r.v, r.min, r.max], [100 * MB, 250 * MB, 60 * MB, 250 * MB]);
+  assert.equal(st.mem[41], undefined, 'chrome:// は測らない');
+  assert.equal(st.mem[42], undefined, '外れたタブは測らない');
+  assert.equal(st.canRead, true);
+
+  await chrome.webNavigation.onCommitted.fire({ frameId: 0, tabId: 40, timeStamp: Date.now() });
+  assert.equal(chrome._store.session.mem[40], undefined);
+  w.host = false;
+});
+
+test('許可が無ければメモリは測らない', async () => {
+  w.tabs = [tab(50)];
+  w.heap = { 50: 10 * 1048576 };
+  await tick(chrome);
+  const st = await send(chrome, { type: 'status' });
+  assert.equal(st.mem[50], undefined);
+  assert.equal(st.canRead, false);
 });
