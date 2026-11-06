@@ -1,54 +1,60 @@
-import { DEFAULTS, HOUR, ageOf, isLoaded, formatAge } from './core.js';
+import { DEFAULTS, overdue, formatAge } from './core.js';
 
 const $ = id => document.getElementById(id);
 
-async function loadSettings() {
-  const s = { ...DEFAULTS, ...(await chrome.storage.sync.get(DEFAULTS)) };
-  $('hours').value = s.hours;
-  $('color').value = s.color;
-  $('restore').checked = s.restore;
-  return s;
+// その窓を前に出し、タブを選ぶ
+export async function focusTab(tab) {
+  await chrome.windows.update(tab.windowId, { focused: true });
+  await chrome.tabs.update(tab.id, { active: true });
 }
 
 async function render() {
-  const s = await loadSettings();
+  const s = { ...DEFAULTS, ...(await chrome.storage.sync.get(DEFAULTS)) };
+  $('hours').value = s.hours;
   const st = await chrome.runtime.sendMessage({ type: 'status' });
-  const now = Date.now();
-  const groups = new Set(st.groups);
-  const rows = st.tabs
-    .filter(isLoaded)
-    .map(t => ({ t, age: ageOf(t, st.loadedAt, now) }))
-    .sort((a, b) => (b.age ?? -1) - (a.age ?? -1));
-  const over = rows.filter(r => r.age !== null && r.age >= s.hours * HOUR).length;
-  $('summary').textContent =
-    `読み込まれているタブ ${rows.length} 個のうち、${s.hours} 時間を過ぎたもの ${over} 個（外れたタブは数えません）`;
-  const tb = $('list');
-  tb.textContent = '';
-  for (const { t, age } of rows) {
-    const tr = document.createElement('tr');
-    if (age !== null && age >= s.hours * HOUR) tr.className = 'over';
-    const state = groups.has(t.groupId) ? 'TooLong' : t.pinned ? 'ピン留め（移しません）' : '';
-    for (const [text, cls] of [[formatAge(age)], [t.title || t.url, 'title'], [state]]) {
-      const td = document.createElement('td');
-      td.textContent = text;
-      if (cls) td.className = cls;
-      tr.appendChild(td);
-    }
-    tb.appendChild(tr);
+  const rows = overdue(st.tabs, st.loadedAt, Date.now(), s.hours);
+  const winNo = new Map(st.windows.map((id, i) => [id, i + 1]));
+
+  $('summary').textContent = rows.length
+    ? `${s.hours} 時間を過ぎたタブ ${rows.length} 個（古い順）。押すとそのタブへ移ります`
+    : '';
+  const ul = $('list');
+  ul.textContent = '';
+  if (!rows.length) {
+    const li = document.createElement('div');
+    li.className = 'empty';
+    li.textContent = `${s.hours} 時間を過ぎたタブはありません`;
+    ul.appendChild(li);
   }
+  for (const { tab, age } of rows) {
+    const li = document.createElement('li');
+    li.tabIndex = 0;
+    li.title = tab.url || '';
+    const icon = document.createElement('img');
+    // サイトへ取りに行かず、Chrome が手元に持っているアイコンを使う
+    icon.src = `/_favicon/?pageUrl=${encodeURIComponent(tab.url || '')}&size=16`;
+    icon.alt = '';
+    const a = Object.assign(document.createElement('span'), { className: 'age', textContent: formatAge(age) });
+    const t = Object.assign(document.createElement('span'), { className: 'title', textContent: tab.title || tab.url });
+    const w = Object.assign(document.createElement('span'), { className: 'win', textContent: `窓${winNo.get(tab.windowId) ?? '?'}` });
+    li.append(a, icon, t, w);
+    const go = () => focusTab(tab).then(() => window.close());
+    li.onclick = go;
+    li.onkeydown = e => { if (e.key === 'Enter') go(); };
+    ul.appendChild(li);
+  }
+
   const granted = await chrome.permissions.contains({ origins: ['<all_urls>'] });
   $('perm-note').textContent = granted
-    ? '許可済み: 入れる前から開いていたタブも、ページを読み込んだ時刻を読みます（読むのは時刻だけで、外へは送りません）。'
-    : '許可なし: 入れる前から開いていたタブは、入れた時刻から数えます（実際より短く出ます）。';
+    ? ''
+    : '入れる前から開いていたタブは、入れた時刻から数えています（実際より短く出ます）。';
   $('perm').hidden = granted;
 }
 
 $('save').onclick = async () => {
   const hours = Math.max(0.1, Number($('hours').value) || DEFAULTS.hours);
-  await chrome.storage.sync.set({ hours, color: $('color').value, restore: $('restore').checked });
-  $('msg').textContent = '確かめています…';
-  const r = await chrome.runtime.sendMessage({ type: 'check' });
-  $('msg').textContent = r.ok ? '保存しました' : `失敗: ${r.error}`;
+  await chrome.storage.sync.set({ hours });
+  await chrome.runtime.sendMessage({ type: 'check' });
   render();
 };
 

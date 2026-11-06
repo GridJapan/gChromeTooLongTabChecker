@@ -34,48 +34,49 @@ const ev = async expr => { const i = ++n; ws.send(JSON.stringify({ id: i, method
 const B = 'http://127.0.0.1:8766/';
 let failed = 0;
 const expect = (label, got, want) => {
-  const norm = v => JSON.stringify(v && typeof v === "object" ? Object.fromEntries(Object.entries(v).sort()) : v);
-  const ok = norm(got) === norm(want);
+  const ok = JSON.stringify(got) === JSON.stringify(want);
   if (!ok) failed++;
   console.log(`${ok ? '✔' : '✖'} ${label}${ok ? '' : `\n    期待 ${JSON.stringify(want)}\n    実際 ${JSON.stringify(got)}`}`);
 };
-// アラームを今すぐ鳴らして、定期の確認を 1 回動かす
-const check = () => ev(`(async () => { chrome.alarms.create('toolong-check', { when: Date.now() + 10 }); await new Promise(r => setTimeout(r, 2500)); return 1; })()`);
-const state = () => ev(`(async () => {
-  const out = {};
-  for (const t of await chrome.tabs.query({ url: '${B}*' })) {
-    out[t.title] = t.groupId === -1 ? '-' : await chrome.tabGroups.get(t.groupId).then(g => g.title + '/' + g.color);
-  }
-  return out;
-})()`);
+// 別のページ（拡張機能の一覧の画面など）につないで式を評価する
+const attach = async url => {
+  const t = (await j('/json/list')).find(x => x.url.startsWith(url));
+  const s2 = new WebSocket(t.webSocketDebuggerUrl); await new Promise(r => s2.onopen = r);
+  let k = 0; const pd = new Map();
+  s2.onmessage = e => { const m = JSON.parse(e.data); if (pd.has(m.id)) { pd.get(m.id)(m); pd.delete(m.id); } };
+  const run = async expr => { const i = ++k; s2.send(JSON.stringify({ id: i, method: 'Runtime.evaluate', params: { expression: expr, awaitPromise: true, returnByValue: true } })); const m = await new Promise(r => pd.set(i, r)); return m.result.result?.value; };
+  return { run, close: () => s2.close() };
+};
 
+// 窓 2 つにタブを 3 つ。p1・p3 は古くし、p2 はあとで読み込み直して新しくする
 await ev(`(async () => {
   await chrome.tabs.create({ url: '${B}p1', active: false });
+  const w2 = await chrome.windows.create({ url: '${B}p3' });
   await chrome.tabs.create({ url: '${B}p2', active: false });
-  const t3 = await chrome.tabs.create({ url: '${B}p3', active: false });
-  const g = await chrome.tabs.group({ tabIds: [t3.id] });
-  await chrome.tabGroups.update(g, { title: '仕事', color: 'blue' });
   await chrome.storage.sync.set({ hours: 0.002 });   // 7.2 秒
   return 1;
 })()`);
-await sleep(9000);
-await check();
-expect('時間を過ぎた 3 タブが TooLong へ移る', await state(), { page1: 'TooLong/red', page2: 'TooLong/red', page3: 'TooLong/red' });
+await sleep(8500);
+await ev(`(async () => { const [t] = await chrome.tabs.query({ url: '${B}p2' }); await chrome.tabs.reload(t.id); await new Promise(r => setTimeout(r, 1500)); return 1; })()`);
 
-await ev(`(async () => { const [t] = await chrome.tabs.query({ url: '${B}p3' }); await chrome.tabs.reload(t.id); await new Promise(r => setTimeout(r, 1500)); return 1; })()`);
-await check();
-expect('読み込み直したタブは、消えた「仕事」グループを作り直して戻る', await state(), { page1: 'TooLong/red', page2: 'TooLong/red', page3: '仕事/blue' });
+const EXTURL = `chrome-extension://${MYID}/options.html`;
+await ev(`chrome.tabs.create({ url: '${EXTURL}' }).then(() => 1)`);
+await sleep(2500);
+const page = await attach(EXTURL);
+const items = await page.run(`[...document.querySelectorAll('#list li .title')].map(e => e.textContent)`);
+expect('時間を過ぎたタブだけが、古い順に一覧に出る（最初の about:blank も古い。読み込み直した p2 は出ない）', items, ['about:blank', 'page1', 'page3']);
+expect('アイコンの数', await ev(`chrome.action.getBadgeText({})`), '3');   // p1・p3 と最初の about:blank
 
-await ev(`(async () => { const [t] = await chrome.tabs.query({ url: '${B}p1' }); await chrome.tabs.discard(t.id); return 1; })()`);
-await check();
-expect('外したタブは TooLong から出る', await state(), { page1: '-', page2: 'TooLong/red', page3: '仕事/blue' });
+// 一覧の page3（別の窓）を押す
+await page.run(`[...document.querySelectorAll('#list li')].find(li => li.querySelector('.title').textContent === 'page3').click(), 1`);
+await sleep(1500);
+const active = await ev(`(async () => {
+  const [t] = await chrome.tabs.query({ url: '${B}p3' });
+  const w = await chrome.windows.get(t.windowId);
+  const [cur] = await chrome.tabs.query({ active: true, windowId: t.windowId });
+  return { tabActive: t.active, windowFocused: w.focused, activeTitle: cur.title };
+})()`);
+expect('押すと、その窓が前に出て、そのタブが選ばれる', active, { tabActive: true, windowFocused: true, activeTitle: 'page3' });
 
-await ev(`chrome.tabs.create({ url: chrome.runtime.getURL('options.html') }).then(() => 1)`);
-await sleep(2000);
-const op = (await j('/json/list')).find(t => t.url.endsWith('/options.html'));
-const w2 = new WebSocket(op.webSocketDebuggerUrl); await new Promise(r => w2.onopen = r);
-w2.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression: 'document.getElementById("summary").textContent', returnByValue: true } }));
-const summary = await new Promise(r => w2.onmessage = e => r(JSON.parse(e.data).result.result.value));
-expect('設定画面に一覧が出る', /読み込まれているタブ \d+ 個/.test(summary), true);
-w2.close(); ws.close();
+page.close(); ws.close();
 done(failed ? 1 : 0);

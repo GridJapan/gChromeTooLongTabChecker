@@ -1,12 +1,11 @@
 // 判定だけを行う部分。chrome.* を呼ばないので、node のテストからも読める。
 
-export const GROUP_TITLE = 'TooLong';
-
 export const DEFAULTS = {
-  hours: 24,          // 読み込んでからこの時間を過ぎたタブを TooLong へ移す
-  color: 'red',       // TooLong グループの色
-  restore: true,      // 読み込み直した・外れたタブを、元のグループへ戻す
+  hours: 24,          // 読み込んでからこの時間を過ぎたタブを一覧に出す
 };
+
+// 0.1.0 が作っていたグループの名前。更新したときに片付ける
+export const OLD_GROUP_TITLE = 'TooLong';
 
 export const HOUR = 3600 * 1000;
 
@@ -21,28 +20,14 @@ export function ageOf(tab, loadedAt, now) {
   return typeof t === 'number' ? Math.max(0, now - t) : null;
 }
 
-// 何をするかを決める。
-//   tabs:        chrome.tabs.query({}) の結果
-//   loadedAt:    { tabId: 読み込んだ時刻(ms) }
-//   tooLongIds:  TooLong グループの id の集合（窓ごとに 1 つ）
-// 返り値:
-//   group:   { windowId: [tabId, ...] }  TooLong へ移すタブ
-//   release: [tabId, ...]                TooLong から出すタブ（読み込み直した・外れた）
-export function plan(tabs, loadedAt, now, hours, tooLongIds) {
+// 決めた時間を過ぎた、読み込まれているタブ。古い順に [{ tab, age }]
+export function overdue(tabs, loadedAt, now, hours) {
   const limit = hours * HOUR;
-  const group = {};
-  const release = [];
-  for (const tab of tabs) {
-    const inTooLong = tooLongIds.has(tab.groupId);
-    const age = ageOf(tab, loadedAt, now);
-    const old = isLoaded(tab) && age !== null && age >= limit;
-    if (old && !inTooLong && !tab.pinned) {
-      (group[tab.windowId] ||= []).push(tab.id);
-    } else if (!old && inTooLong) {
-      release.push(tab.id);
-    }
-  }
-  return { group, release };
+  return tabs
+    .filter(isLoaded)
+    .map(tab => ({ tab, age: ageOf(tab, loadedAt, now) }))
+    .filter(r => r.age !== null && r.age >= limit)
+    .sort((a, b) => b.age - a.age);
 }
 
 // 3 時間 5 分 → "3時間5分"

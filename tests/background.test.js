@@ -10,16 +10,15 @@ function fakeChrome() {
   const area = name => ({
     get: async def => ({ ...structuredClone(def), ...structuredClone(store[name]) }),
     set: async o => { Object.assign(store[name], structuredClone(o)); },
+    remove: async k => { for (const x of [].concat(k)) delete store[name][x]; },
   });
-  const w = {
-    tabs: [], groups: [], nextGroup: 100, badge: '', host: false,
-  };
+  const w = { tabs: [], groups: [], nextGroup: 100, badge: '', host: false };
+  const alive = g => w.tabs.some(t => t.groupId === g.id);
   const c = {
     _w: w, _store: store,
     storage: { session: area('session'), sync: area('sync') },
     tabs: {
-      query: async () => structuredClone(w.tabs),
-      get: async id => structuredClone(w.tabs.find(t => t.id === id)),
+      query: async (q = {}) => structuredClone(w.tabs.filter(t => q.groupId === undefined || t.groupId === q.groupId)),
       group: async ({ groupId, tabIds, createProperties }) => {
         let g = groupId;
         if (g === undefined) { g = w.nextGroup++; w.groups.push({ id: g, windowId: createProperties.windowId, title: '' }); }
@@ -30,10 +29,11 @@ function fakeChrome() {
       onReplaced: ev(), onRemoved: ev(),
     },
     tabGroups: {
-      query: async ({ title, windowId }) => w.groups.filter(g => g.title === title && (windowId === undefined || g.windowId === windowId) && w.tabs.some(t => t.groupId === g.id)),
-      get: async id => { const g = w.groups.find(g => g.id === id && w.tabs.some(t => t.groupId === g.id)); if (!g) throw new Error('no group'); return structuredClone(g); },
+      query: async ({ title, windowId }) => w.groups.filter(g => g.title === title && (windowId === undefined || g.windowId === windowId) && alive(g)),
+      get: async id => { const g = w.groups.find(g => g.id === id && alive(g)); if (!g) throw new Error('no group'); return structuredClone(g); },
       update: async (id, p) => Object.assign(w.groups.find(g => g.id === id), p),
     },
+    windows: { getAll: async () => [...new Set(w.tabs.map(t => t.windowId))].map(id => ({ id })) },
     webNavigation: { onCommitted: ev() },
     permissions: { contains: async () => w.host },
     scripting: { executeScript: async () => [{ result: Date.now() - 48 * HOUR }] },
@@ -52,69 +52,60 @@ globalThis.chrome = chrome;
 await import('../src/background.js');
 const w = chrome._w;
 
-test('読み込んだ時刻を覚え、時間を過ぎたら TooLong を作って入れる。元のグループを覚える', async () => {
-  w.groups.push({ id: 5, windowId: 1, title: '仕事', color: 'blue' });
-  w.tabs = [tab(1, { groupId: 5 }), tab(2), tab(3, { windowId: 2 })];
+test('読み込んだ時刻を覚え、時間を過ぎたタブの数をアイコンに出す。グループには触らない', async () => {
+  w.tabs = [tab(1), tab(2), tab(3, { windowId: 2 })];
   await chrome.storage.sync.set({ hours: 24 });
   const old = Date.now() - 30 * HOUR;
   await chrome.webNavigation.onCommitted.fire({ frameId: 0, tabId: 1, timeStamp: old });
   await chrome.webNavigation.onCommitted.fire({ frameId: 0, tabId: 3, timeStamp: old });
   await chrome.webNavigation.onCommitted.fire({ frameId: 0, tabId: 2, timeStamp: Date.now() });
   await chrome.webNavigation.onCommitted.fire({ frameId: 1, tabId: 2, timeStamp: old }); // iframe は数えない
-  assert.deepEqual(await send(chrome, { type: 'check' }), { ok: true });
-
-  const tl = w.groups.filter(g => g.title === 'TooLong');
-  assert.equal(tl.length, 2, '窓ごとに 1 つ');
-  assert.equal(w.tabs[0].groupId, tl.find(g => g.windowId === 1).id);
-  assert.equal(w.tabs[1].groupId, -1);
-  assert.equal(w.tabs[2].groupId, tl.find(g => g.windowId === 2).id);
-  assert.deepEqual(chrome._store.session.origGroup[1], { id: 5, title: '仕事', color: 'blue' });
+  const st = await send(chrome, { type: 'status' });
   assert.equal(w.badge, '2');
+  assert.deepEqual(st.windows, [1, 2]);
+  assert.equal(st.loadedAt[1], Math.round(old));
+  assert.ok(w.tabs.every(t => t.groupId === -1));
 });
 
-test('2 回目の確認で同じ窓の TooLong を使い回す', async () => {
-  const before = w.groups.length;
-  w.tabs.push(tab(4));
-  await chrome.webNavigation.onCommitted.fire({ frameId: 0, tabId: 4, timeStamp: Date.now() - 25 * HOUR });
-  await send(chrome, { type: 'check' });
-  assert.equal(w.groups.length, before);
-  assert.equal(w.tabs[3].groupId, w.tabs[0].groupId);
-});
-
-test('読み込み直したタブは元のグループへ戻る。グループが空になって消えていれば作り直す。元が無ければグループから出る', async () => {
+test('読み込み直すと数え直す。外れたタブは数えない', async () => {
   await chrome.webNavigation.onCommitted.fire({ frameId: 0, tabId: 1, timeStamp: Date.now() });
-  await chrome.webNavigation.onCommitted.fire({ frameId: 0, tabId: 4, timeStamp: Date.now() });
-  await send(chrome, { type: 'check' });
-  const g = w.groups.find(g => g.id === w.tabs[0].groupId);
-  assert.equal(g.title, '仕事');
-  assert.equal(g.color, 'blue');
-  assert.equal(w.tabs[3].groupId, -1);
-  assert.equal(chrome._store.session.origGroup[1], undefined);
-});
-
-test('外れたタブは TooLong から出る。id が替わっても記録を引き継ぐ', async () => {
   w.tabs[2].discarded = true;
   await send(chrome, { type: 'check' });
-  assert.equal(w.tabs[2].groupId, -1);
+  assert.equal(w.badge, '');
+});
 
+test('id が替わっても記録を引き継ぎ、閉じたタブの記録を消す', async () => {
   const t = chrome._store.session.loadedAt[3];
   w.tabs[2].id = 33;
   await chrome.tabs.onReplaced.fire(33, 3);
   assert.equal(chrome._store.session.loadedAt[33], t);
   assert.equal(chrome._store.session.loadedAt[3], undefined);
+  await chrome.tabs.onRemoved.fire(33);
+  assert.equal(chrome._store.session.loadedAt[33], undefined);
 });
 
 test('記録の無いタブ: 許可が無ければ今から数え、許可があればページの読み込み時刻を読む', async () => {
   w.tabs = [tab(10)];
   await send(chrome, { type: 'check' });
-  assert.equal(w.tabs[0].groupId, -1);
-
+  assert.equal(w.badge, '');
   w.host = true;
   await send(chrome, { type: 'forget' });
-  assert.ok(w.tabs[0].groupId !== -1, '48 時間前に読み込んだと読めたので移る');
+  assert.equal(w.badge, '1', '48 時間前に読み込んだと読めた');
+  w.host = false;
 });
 
-test('閉じたタブの記録を消す', async () => {
-  await chrome.tabs.onRemoved.fire(10);
-  assert.equal(chrome._store.session.loadedAt[10], undefined);
+test('0.1.0 から更新したら、TooLong グループを片付けて元のグループへ戻す', async () => {
+  // 0.1.0 の状態: タブ 20・21 を TooLong へ移していた。20 は「仕事」（もう消えた）から、21 はグループ無しから
+  w.tabs = [tab(20, { groupId: 7 }), tab(21, { groupId: 7 }), tab(22)];
+  w.groups.push({ id: 7, windowId: 1, title: 'TooLong', color: 'red' });
+  await chrome.storage.session.set({ origGroup: { 20: { id: 5, title: '仕事', color: 'blue' } } });
+  await chrome.storage.sync.set({ color: 'red', restore: true });
+  await chrome.runtime.onInstalled.fire({ reason: 'update' });
+  await send(chrome, { type: 'check' });   // 片付けが終わるのを待つ
+
+  const g20 = w.groups.find(g => g.id === w.tabs[0].groupId);
+  assert.deepEqual([g20.title, g20.color], ['仕事', 'blue']);
+  assert.equal(w.tabs[1].groupId, -1);
+  assert.equal(chrome._store.session.origGroup, undefined);
+  assert.equal(chrome._store.sync.color, undefined);
 });
